@@ -82,6 +82,7 @@ public partial class ChannelService
             IncludeSpecials = src.IncludeSpecials,
             Shuffle = src.Shuffle,
             LoopMode = src.LoopMode,
+            AdvanceEveryLoop = src.AdvanceEveryLoop,
             ShuffleEpisodes = src.ShuffleEpisodes,
             FavorKind = src.FavorKind,
             FavorStrength = src.FavorStrength,
@@ -215,7 +216,8 @@ public partial class ChannelService
             PopularChannelId,
             channel.FavorKind,
             channel.FavorStrength,
-            LoopRotation());
+            LoopRotation(),
+            channel.AdvanceEveryLoop);
 
         return ProgramLoopBuilder.Build(entries, options);
     }

@@ -1,0 +1,87 @@
+name: 'Fork release (Jellyfin 10.11)'
+
+# Builds, tests and publishes this fork's 10.11 plugin package, then points manifest.json at it so Jellyfin
+# can install from:
+#   https://raw.githubusercontent.com/<owner>/jellyfin-plugin-livechannels/advance-every-loop-10.11/manifest.json
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - advance-every-loop-10.11
+    paths:
+      - 'Jellyfin.Plugin.LiveChannels/**'
+      - 'Jellyfin.Plugin.LiveChannels.Tests/**'
+      - 'build.yaml'
+      - 'build.sh'
+      - '.github/workflows/fork-release.yaml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Test
+        run: dotnet test Jellyfin.Plugin.LiveChannels.Tests/Jellyfin.Plugin.LiveChannels.Tests.csproj --configuration Release
+
+      - name: Build package
+        run: bash build.sh Release
+
+      - name: Publish release and manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(grep '^version:' build.yaml | cut -d':' -f2 | tr -d ' "')
+          ABI=$(grep '^targetAbi:' build.yaml | cut -d':' -f2 | tr -d ' "')
+          ZIP="dist/jellyfin-plugin-livechannels-${VERSION}.zip"
+          test -f "$ZIP"
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" "$ZIP" --target "$GITHUB_SHA" \
+            --title "Live Channels ${VERSION} (Advance shows every loop)" \
+            --notes "Jellyfin 10.11 build of upstream 10.11.13.3 plus the Advance shows every loop option. Built from ${GITHUB_SHA} by this workflow."
+          CHECKSUM=$(md5sum "$ZIP" | cut -d' ' -f1)
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/$(basename "$ZIP")"
+          IMAGE="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/Jellyfin.Plugin.LiveChannels/Assets/Logo.png"
+          jq -n \
+            --arg version "$VERSION" --arg abi "$ABI" --arg url "$URL" --arg checksum "$CHECKSUM" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg owner "$GITHUB_REPOSITORY_OWNER" --arg image "$IMAGE" \
+            '[{
+              guid: "ac6940fb-aac6-4de8-b622-55a662e23658",
+              name: "Live Channels",
+              overview: "Build looping virtual TV channels that appear natively in Jellyfin'"'"'s Live TV.",
+              description: "Fork of JPKribs/jellyfin-plugin-livechannels with the Advance shows every loop option.",
+              owner: $owner,
+              category: "Live TV",
+              imageUrl: $image,
+              versions: [{
+                version: $version,
+                changelog: "Adds the Advance shows every loop option for shuffled channels.",
+                targetAbi: $abi,
+                sourceUrl: $url,
+                checksum: $checksum,
+                timestamp: $ts
+              }]
+            }]' > manifest.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Update fork manifest for ${TAG}" || exit 0
+          git push origin "HEAD:${GITHUB_REF_NAME}"

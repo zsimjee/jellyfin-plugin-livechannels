@@ -1069,6 +1069,7 @@ export default function (view) {
         el('includeHomeVideos').checked = !!ch.IncludeHomeVideos;
         el('loopMode').value = ch.LoopMode || (ch.Shuffle === false ? 'Alphabetical' : 'Shuffle');
         el('episodeOrder').value = ch.ShuffleEpisodes ? 'random' : 'air';
+        el('advanceEveryLoop').checked = !!ch.AdvanceEveryLoop;
         el('favorKind').value = ch.FavorKind || 'None';
         el('favorStrength').value = ch.FavorStrength || 'Moderate';
         updateFavorControls();
@@ -1117,6 +1118,7 @@ export default function (view) {
         ch.LoopMode = el('loopMode').value;
         ch.Shuffle = ch.LoopMode === 'Shuffle';
         ch.ShuffleEpisodes = el('episodeOrder').value === 'random';
+        ch.AdvanceEveryLoop = el('advanceEveryLoop').checked;
         ch.FavorKind = el('favorKind').value;
         ch.FavorStrength = el('favorStrength').value;
         ch.SubtitleBurnIn = el('subtitleBurnIn').value;
@@ -1290,7 +1292,7 @@ export default function (view) {
             LogoStyle: 'Number', LogoSymbol: '', LogoShowName: true,
             Sources: [], AudioLanguage: '', RatingBlocks: [], TransitionWindowMinutes: 0, MinOfficialRating: '', MaxOfficialRating: '', IncludeUnrated: true, Category: 'None',
             EpisodesPerBlock: 1, KeepMultiPartTogether: true,
-            IncludeEpisodes: true, IncludeMovies: true, IncludeSpecials: false, IncludeMusicVideos: true, IncludeHomeVideos: false, Shuffle: true, LoopMode: 'Shuffle', ShuffleEpisodes: false,
+            IncludeEpisodes: true, IncludeMovies: true, IncludeSpecials: false, IncludeMusicVideos: true, IncludeHomeVideos: false, Shuffle: true, LoopMode: 'Shuffle', ShuffleEpisodes: false, AdvanceEveryLoop: false,
             FavorKind: 'None', FavorStrength: 'Moderate', SubtitleBurnIn: 'Never', Enabled: true
         });
         currentIndex = channels.length - 1;

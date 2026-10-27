@@ -268,6 +268,142 @@ public class LoopBuilderTests
     }
 
     [Fact]
+    public void AdvanceEveryLoop_Off_IsTheClassicSinglePass()
+    {
+        // The option defaults off, and off must build exactly the loop it always did.
+        var items = ThreeShows(out _, out _, out _);
+
+        var classic = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", Rotation: 7));
+        var explicitOff = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", Rotation: 7, AdvanceEveryLoop: false));
+
+        Assert.Equal(classic.Select(e => e.ItemId), explicitOff.Select(e => e.ItemId));
+        Assert.Equal(3 * 2, classic.Count); // one 2-episode block per show
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_WalksEverySeriesBlockByBlock()
+    {
+        // Three shows of 4, 6 and 10 episodes at 2 per block. The longest needs 5 passes, so the loop holds 5
+        // passes; on each pass every show airs its NEXT block, so the 10-episode show airs all 10 episodes once
+        // and the shorter shows wrap round and start again.
+        var items = ThreeShows(out var a, out var b, out var c);
+
+        var loop = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", AdvanceEveryLoop: true));
+
+        Assert.Equal(5 * 3 * 2, loop.Count);
+        Assert.Equal(Enumerable.Range(1, 10), EpisodeOrder(loop, c).OrderBy(n => n));
+
+        // Each show's blocks advance pass to pass: consecutive blocks of a show are consecutive in air order
+        // (wrapping at the end), never the same block twice in a row.
+        foreach (var (id, length) in new[] { (a, 4), (b, 6), (c, 10) })
+        {
+            var eps = EpisodeOrder(loop, id);
+            for (var i = 2; i < eps.Count; i += 2)
+            {
+                var expected = (eps[i - 2] + 2 - 1) % length + 1;
+                Assert.Equal(expected, eps[i]);
+            }
+        }
+
+        Assert.True(MaxRun(loop) <= 2, "a series ran longer than one block: " + MaxRun(loop));
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_FirstPassMatchesClassicLoop()
+    {
+        // Pass 0 of an advancing loop is the classic loop, so switching the option on keeps today's lineup and only
+        // changes what comes after it.
+        var items = ThreeShows(out _, out _, out _);
+
+        var classic = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", Rotation: 0));
+        var advancing = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", Rotation: 0, AdvanceEveryLoop: true));
+
+        Assert.Equal(classic.Select(e => e.ItemId), advancing.Take(classic.Count).Select(e => e.ItemId));
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_IsTheSameLoopEveryDay()
+    {
+        // An advancing loop that plays every series through ignores the daily rotation, so a refresh rebuilds the
+        // identical loop and the epoch-anchored schedule carries straight on instead of jumping.
+        var items = ThreeShows(out _, out _, out _);
+
+        var today = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", Rotation: 10, AdvanceEveryLoop: true));
+        var tomorrow = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", Rotation: 11, AdvanceEveryLoop: true));
+
+        Assert.Equal(today.Select(e => e.ItemId), tomorrow.Select(e => e.ItemId));
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_CappedLoop_StillRotatesDaily()
+    {
+        // A loop the cap cut short cannot hold every block of its longest series, so it keeps the daily rotation to
+        // bring the rest round over the following days.
+        var s = Guid.NewGuid();
+        var items = Enumerable.Range(1, 20000).Select(i => Ep(s, "Long", 1, i, "e" + i)).ToList();
+
+        var day0 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(1, false, LoopMode.Shuffle, false, "ch1", Rotation: 0, AdvanceEveryLoop: true));
+        var day1 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(1, false, LoopMode.Shuffle, false, "ch1", Rotation: 1, AdvanceEveryLoop: true));
+
+        Assert.NotEqual(day0[0].ItemId, day1[0].ItemId);
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_KeepsMoviesOncePerPass()
+    {
+        var s = Guid.NewGuid();
+        var items = new List<ProgramEntry> { Movie("Zed"), Movie("Abe") };
+        items.AddRange(Enumerable.Range(1, 6).Select(i => Ep(s, "Show", 1, i, "e" + i)));
+
+        var loop = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Shuffle, false, "ch1", AdvanceEveryLoop: true));
+
+        Assert.Equal(3 * 2, loop.Count(e => e.SeriesId is null));          // 3 passes, both movies each pass
+        Assert.Equal(Enumerable.Range(1, 6), EpisodeOrder(loop, s).OrderBy(n => n));
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_IsCappedInSize()
+    {
+        // A very long series must not explode the loop: it stops adding passes at the entry cap.
+        var s = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var items = Enumerable.Range(1, 20000).Select(i => Ep(s, "Long", 1, i, "e" + i)).ToList();
+        items.AddRange(Enumerable.Range(1, 4).Select(i => Ep(other, "Short", 1, i, "e" + i)));
+
+        var loop = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(1, false, LoopMode.Shuffle, false, "ch1", AdvanceEveryLoop: true));
+
+        Assert.True(loop.Count <= ProgramLoopBuilder.MaxAdvancingLoopEntries, "loop exceeded the cap: " + loop.Count);
+        Assert.True(loop.Count > 2, "the loop should still hold several passes");
+    }
+
+    [Fact]
+    public void AdvanceEveryLoop_IgnoredWhenNotShuffled()
+    {
+        var items = ThreeShows(out _, out _, out _);
+
+        var plain = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Alphabetical, false, "ch1"));
+        var advancing = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.Alphabetical, false, "ch1", AdvanceEveryLoop: true));
+
+        Assert.Equal(plain.Select(e => e.ItemId), advancing.Select(e => e.ItemId));
+    }
+
+    // Three series of 4, 6 and 10 episodes.
+    private static List<ProgramEntry> ThreeShows(out Guid a, out Guid b, out Guid c)
+    {
+        a = new Guid("aaaaaaaa-0000-0000-0000-000000000001");
+        b = new Guid("bbbbbbbb-0000-0000-0000-000000000002");
+        c = new Guid("cccccccc-0000-0000-0000-000000000003");
+        var sa = a;
+        var sb = b;
+        var sc = c;
+        var items = new List<ProgramEntry>();
+        items.AddRange(Enumerable.Range(1, 4).Select(i => Ep(sa, "Alpha", 1, i, "a" + i)));
+        items.AddRange(Enumerable.Range(1, 6).Select(i => Ep(sb, "Bravo", 1, i, "b" + i)));
+        items.AddRange(Enumerable.Range(1, 10).Select(i => Ep(sc, "Charlie", 1, i, "c" + i)));
+        return items;
+    }
+
+    [Fact]
     public void Movies_OrderAlphabetically_WhenNotShuffled()
     {
         var loop = ProgramLoopBuilder.Build(new[] { Movie("Zed"), Movie("Abe"), Movie("Mid") }, Opts());

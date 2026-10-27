@@ -99,6 +99,9 @@ public class Channel
     /// <summary>Gets or sets how the channel arranges its loop: shuffle, alphabetical, or chronological. Supersedes <see cref="Shuffle"/>.</summary>
     public LoopMode LoopMode { get; set; } = LoopMode.Shuffle;
 
+    /// <summary>Gets or sets a value indicating whether a shuffled loop advances every series to its next block on each pass through the loop, instead of airing the same block on every pass until the next daily rotation. Off by default so existing channels are unchanged.</summary>
+    public bool AdvanceEveryLoop { get; set; }
+
     /// <summary>Gets or sets a value indicating whether episodes within a series are shuffled rather than played in air order.</summary>
     public bool ShuffleEpisodes { get; set; }
 

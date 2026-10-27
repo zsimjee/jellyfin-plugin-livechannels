@@ -237,7 +237,8 @@ public partial class ChannelService
             channel.Id,
             channel.FavorKind,
             channel.FavorStrength,
-            LoopRotation());
+            LoopRotation(),
+            channel.AdvanceEveryLoop);
 
         return ProgramLoopBuilder.Build(entries, options);
     }

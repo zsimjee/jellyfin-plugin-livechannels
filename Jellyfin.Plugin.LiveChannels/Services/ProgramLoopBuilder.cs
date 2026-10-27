@@ -19,6 +19,11 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// <param name="Rotation">A counter (e.g. days since an epoch) that advances which single block each series
 /// contributes in a shuffled loop, so the channel walks through a series over time. Stable within a built
 /// schedule (guide and stream agree); the caller bumps it each refresh.</param>
+/// <param name="AdvanceEveryLoop">On a shuffled loop, build several passes back to back and advance every series to
+/// its next block on each pass, instead of airing the same block on every pass until the next refresh. The loop
+/// grows to as many passes as the longest series needs to play through (capped at
+/// <see cref="ProgramLoopBuilder.MaxAdvancingLoopEntries"/> entries). An uncapped advancing loop ignores
+/// <paramref name="Rotation"/>, so it is the same loop every day.</param>
 public readonly record struct ChannelLoopOptions(
     int EpisodesPerBlock,
     bool KeepMultiPartTogether,
@@ -27,7 +32,8 @@ public readonly record struct ChannelLoopOptions(
     string ChannelId,
     FavorKind FavorKind = FavorKind.None,
     FavorStrength FavorStrength = FavorStrength.Moderate,
-    int Rotation = 0);
+    int Rotation = 0,
+    bool AdvanceEveryLoop = false);
 
 /// <summary>
 /// Turns a channel's resolved items into the ordered loop it cycles through: episodes are grouped by series
@@ -36,6 +42,14 @@ public readonly record struct ChannelLoopOptions(
 /// </summary>
 public static class ProgramLoopBuilder
 {
+    /// <summary>
+    /// The most entries an advancing loop (<see cref="ChannelLoopOptions.AdvanceEveryLoop"/>) may hold. Each pass
+    /// repeats every movie and adds one block per series, so a channel with a very long series could otherwise
+    /// build a loop of hundreds of thousands of entries; past this cap the loop stops adding passes and the daily
+    /// rotation carries the series forward from there. At typical episode lengths this is weeks of airtime.
+    /// </summary>
+    public const int MaxAdvancingLoopEntries = 5000;
+
     // Trailing part markers: "Title (2)", "Title [2]", "Title - Part 2", "Title Pt. 2".
     private static readonly Regex PartSuffix = new(
         @"^(?<base>.*?)[\s:\-]*(?:\((?<n1>\d{1,2})\)|\[(?<n2>\d{1,2})\]|(?:part|pt\.?)\s*(?<n3>\d{1,2}))\s*$",
@@ -117,6 +131,8 @@ public static class ProgramLoopBuilder
         // Each series contributes ONE block per loop, so One Piece and a twelve-episode show get equal footing and
         // no series can dominate. Which block is the series' "current" one rotates with options.Rotation (a per-
         // series offset keeps series from syncing), so the loop walks through each series over successive refreshes.
+        // With AdvanceEveryLoop the loop instead holds several of these passes back to back, each moving every
+        // series on to its next block, so the channel walks through a series pass by pass within a single build.
         // A favoured content type is the one exception: its groups contribute a few blocks (a rotating window) so
         // that type fills more of the loop. The chosen blocks are then ordered round-robin -- one block from each
         // series per round, dealt in a stable per-channel order so a series never straddles a round boundary and the
@@ -134,38 +150,60 @@ public static class ProgramLoopBuilder
                 // needed) so that type fills more of the loop.
                 var take = favored ? Math.Max(1, (int)Math.Round(favorMultiplier)) : 1;
                 var offset = (int)((uint)ShuffleKey(options.ChannelId, "rot:" + g.Key) % (uint)all.Count);
-                var start = (((options.Rotation + offset) % all.Count) + all.Count) % all.Count;
-                var window = new List<Block>(take);
-                for (var k = 0; k < take; k++)
-                {
-                    window.Add(all[(start + k) % all.Count]);
-                }
-
                 var phase = (uint)ShuffleKey(options.ChannelId, "phase:" + g.Key) / (double)uint.MaxValue;
-                return (Ordered: window, Slots: take, Phase: phase);
+                var order = ShuffleKey(options.ChannelId, "order:" + g.Key);
+                return (All: all, Slots: take, Offset: offset, Phase: phase, Order: order);
             })
             .ToList();
 
-        var maxRounds = groups.Max(g => g.Slots);
-        var placements = new List<(int Round, int Order, Block Block)>();
-        foreach (var g in groups)
+        // The blocks a group airs on a given pass. Pass 0 is the classic single-pass loop (its window starts at the
+        // rotation counter); each later pass moves the window on by its own width, so an advancing loop walks a
+        // series block by block instead of replaying the same window.
+        static List<Block> Window(List<Block> all, int take, int offset, int rotation, int pass)
         {
-            // A stable per-series order used in EVERY round, so each round deals the series in the same sequence.
-            // That keeps the same series from straddling a round boundary (round N ends on a different series than
-            // round N+1 begins) -- the only same-series run is the legitimate tail once all other series run out.
-            var order = ShuffleKey(options.ChannelId, "order:" + g.Ordered[0].GroupKey);
-            if (g.Slots <= 1)
+            var count = all.Count;
+            var start = (int)((((long)rotation + offset + ((long)pass * take)) % count + count) % count);
+            var window = new List<Block>(take);
+            for (var k = 0; k < take; k++)
             {
-                // A once-only item (a movie or video): drop it into a round chosen by its phase so the standalone
-                // items scatter through the loop instead of all landing in the first round.
-                var round = Math.Min(maxRounds - 1, (int)(g.Phase * maxRounds));
-                placements.Add((round, order, g.Ordered[0]));
+                window.Add(all[(start + k) % count]);
             }
-            else
+
+            return window;
+        }
+
+        var maxRounds = groups.Max(g => g.Slots);
+        var (passes, complete) = PassCount(groups.Select(g => (g.All, g.Slots)).ToList(), options);
+
+        // An advancing loop whose passes already play every series through needs no daily rotation: it is the
+        // same loop every day, so the schedule never jumps on a refresh. Only a loop cut short by the size cap
+        // keeps rotating, so the series it could not fit still come round over the following days.
+        var rotation = options.AdvanceEveryLoop && complete ? 0 : options.Rotation;
+        var placements = new List<(int Round, int Order, Block Block)>();
+        for (var pass = 0; pass < passes; pass++)
+        {
+            // Rounds are numbered across passes, so every pass deals completely before the next one starts.
+            var roundBase = pass * maxRounds;
+            foreach (var g in groups)
             {
-                for (var r = 0; r < g.Slots; r++)
+                // A stable per-series order used in EVERY round, so each round deals the series in the same
+                // sequence. That keeps the same series from straddling a round boundary (round N ends on a
+                // different series than round N+1 begins) -- the only same-series run is the legitimate tail once
+                // all other series run out.
+                var window = Window(g.All, g.Slots, g.Offset, rotation, pass);
+                if (g.Slots <= 1)
                 {
-                    placements.Add((r, order, g.Ordered[r % g.Ordered.Count]));
+                    // A once-only item (a movie or video): drop it into a round chosen by its phase so the
+                    // standalone items scatter through the loop instead of all landing in the first round.
+                    var round = Math.Min(maxRounds - 1, (int)(g.Phase * maxRounds));
+                    placements.Add((roundBase + round, g.Order, window[0]));
+                }
+                else
+                {
+                    for (var r = 0; r < g.Slots; r++)
+                    {
+                        placements.Add((roundBase + r, g.Order, window[r % window.Count]));
+                    }
                 }
             }
         }
@@ -282,6 +320,35 @@ public static class ProgramLoopBuilder
     // How many times to inflate the favoured type's slots so it reaches its target share of the loop. Returns 1
     // (no change) when nothing is favoured, the type is absent, the type is already the whole channel, or it is
     // already above its target. Capped so a tiny favoured library does not repeat absurdly often.
+    // How many passes a shuffled loop holds. A classic loop is a single pass. An advancing loop holds enough passes
+    // for its longest series to play every block once (a short series simply wraps round and starts again), but
+    // never more entries than MaxAdvancingLoopEntries; past that cap the daily rotation carries the series on.
+    // Also reports whether those passes play every series all the way through (false when the cap cut it short).
+    private static (int Passes, bool Complete) PassCount(List<(List<Block> All, int Take)> groups, ChannelLoopOptions options)
+    {
+        if (!options.AdvanceEveryLoop)
+        {
+            return (1, false);
+        }
+
+        var wanted = 1;
+        var entriesPerPass = 0;
+        foreach (var (all, take) in groups)
+        {
+            if (all[0].GroupKey.StartsWith("series:", StringComparison.Ordinal))
+            {
+                wanted = Math.Max(wanted, (all.Count + take - 1) / take);
+            }
+
+            // A pass airs `take` blocks of the group; use the group's average block size for the estimate.
+            entriesPerPass += take * Math.Max(1, (int)Math.Ceiling(all.Average(b => b.Items.Count)));
+        }
+
+        var affordable = Math.Max(1, MaxAdvancingLoopEntries / Math.Max(1, entriesPerPass));
+        var passes = Math.Clamp(wanted, 1, affordable);
+        return (passes, passes == wanted);
+    }
+
     private static double FavorMultiplier(List<Block> blocks, ChannelLoopOptions options)
     {
         if (options.FavorKind == FavorKind.None)
