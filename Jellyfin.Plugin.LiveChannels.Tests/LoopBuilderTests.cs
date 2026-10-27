@@ -436,4 +436,73 @@ public class LoopBuilderTests
         var loop = ProgramLoopBuilder.Build(items, Opts(mode: LoopMode.Chronological));
         Assert.Equal(new[] { "Dated", "Undated" }, loop.Select(e => e.Title).ToArray());
     }
+
+    [Fact]
+    public void RoundRobin_DealsBlocksInTurn_AdvancingEachPass()
+    {
+        // A 1-2, B 1-2, C 1-2, A 3-4, B 3-4, C 3-4, ... in alphabetical show order, starting at episode 1.
+        var items = ThreeShows(out _, out _, out _);
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 2, mode: LoopMode.RoundRobin));
+
+        var head = loop.Take(12).Select(e => e.SeriesName + " " + e.EpisodeNumber).ToArray();
+        Assert.Equal(
+            new[]
+            {
+                "Alpha 1", "Alpha 2", "Bravo 1", "Bravo 2", "Charlie 1", "Charlie 2",
+                "Alpha 3", "Alpha 4", "Bravo 3", "Bravo 4", "Charlie 3", "Charlie 4"
+            },
+            head);
+    }
+
+    [Fact]
+    public void RoundRobin_PlaysLongestShowThrough_ShorterShowsWrap()
+    {
+        // Charlie (10 episodes, 5 blocks) sets the length: 5 passes. Alpha (4 episodes) wraps back to episode 1.
+        var items = ThreeShows(out var a, out _, out var c);
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 2, mode: LoopMode.RoundRobin));
+
+        Assert.Equal(5 * 3 * 2, loop.Count);
+        Assert.Equal(Enumerable.Range(1, 10), EpisodeOrder(loop, c));
+        Assert.Equal(new[] { 1, 2, 3, 4, 1, 2, 3, 4, 1, 2 }, EpisodeOrder(loop, a));
+    }
+
+    [Fact]
+    public void RoundRobin_IgnoresRotation_SameLoopEveryDay()
+    {
+        var items = ThreeShows(out _, out _, out _);
+
+        var day0 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.RoundRobin, false, "ch1", Rotation: 0));
+        var day1 = ProgramLoopBuilder.Build(items, new ChannelLoopOptions(2, true, LoopMode.RoundRobin, false, "ch1", Rotation: 1));
+
+        Assert.Equal(day0.Select(e => e.ItemId), day1.Select(e => e.ItemId));
+    }
+
+    [Fact]
+    public void RoundRobin_MoviesTakeOneTurnPerPass()
+    {
+        var s = Guid.NewGuid();
+        var items = new List<ProgramEntry> { Movie("Zed"), Movie("Abe"), Movie("Mid") };
+        items.AddRange(Enumerable.Range(1, 4).Select(i => Ep(s, "Show", 1, i, "e" + i)));
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 2, mode: LoopMode.RoundRobin));
+
+        // Movies act as one extra "show" with three one-item blocks, so 3 passes: show block, then the next movie.
+        Assert.Equal(
+            new[] { "Show - e1", "Show - e2", "Abe", "Show - e3", "Show - e4", "Mid", "Show - e1", "Show - e2", "Zed" },
+            loop.Select(e => e.Title).ToArray());
+    }
+
+    [Fact]
+    public void RoundRobin_IsCappedInSize()
+    {
+        var s = Guid.NewGuid();
+        var items = Enumerable.Range(1, 20000).Select(i => Ep(s, "Long", 1, i, "e" + i)).ToList();
+
+        var loop = ProgramLoopBuilder.Build(items, Opts(block: 1, keepMulti: false, mode: LoopMode.RoundRobin));
+
+        Assert.Equal(ProgramLoopBuilder.MaxAdvancingLoopEntries, loop.Count);
+        Assert.Equal(Enumerable.Range(1, ProgramLoopBuilder.MaxAdvancingLoopEntries), EpisodeOrder(loop, s));
+    }
 }

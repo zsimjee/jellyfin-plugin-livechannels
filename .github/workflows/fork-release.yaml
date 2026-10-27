@@ -73,7 +73,7 @@ jobs:
               imageUrl: $image,
               versions: [{
                 version: $version,
-                changelog: "Adds the Advance shows every loop option for shuffled channels.",
+                changelog: "Adds the Round robin loop order and the Advance shows every loop option.",
                 targetAbi: $abi,
                 sourceUrl: $url,
                 checksum: $checksum,
