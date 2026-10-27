@@ -29,6 +29,9 @@ namespace Jellyfin.Plugin.LiveChannels.Services;
 /// </remarks>
 public partial class ChannelService
 {
+    // How many upcoming programs a splice compares to tell repeated occurrences of the airing item apart.
+    private const int SpliceContext = 16;
+
     private readonly ILibraryManager _libraryManager;
     private readonly IMediaSourceManager _mediaSourceManager;
     private readonly ISubtitleEncoder _subtitleEncoder;
@@ -246,18 +249,92 @@ public partial class ChannelService
 
         // An item the rebuild dropped (deleted, or filtered out) cannot continue; the new loop then simply starts
         // at the old program's slot, which still keeps every later program on the new loop's own boundaries.
-        var index = 0;
+        var index = FindSpliceIndex(built, airing.Program.ItemId, () => UpcomingItemIds(channel, previous, airing, nowUtc));
+
+        var rotated = index == 0 ? built : built.Skip(index).Concat(built.Take(index)).ToList();
+        return new ProgramLoop(rotated, airing.Start);
+    }
+
+    /// <summary>
+    /// Picks where in a rebuilt loop the airing item continues. An item usually appears once, but an advancing
+    /// loop (or a favoured type's repeated blocks) can hold it several times; taking the first occurrence would
+    /// then jump the channel back to an earlier pass and replay blocks it has already aired. When the item appears
+    /// more than once, the occurrence whose following items best match what the previous loop had coming up next
+    /// wins (the first occurrence on a tie, and when the item is not in the rebuilt loop at all, index 0).
+    /// </summary>
+    /// <param name="built">The freshly built loop.</param>
+    /// <param name="airingItemId">The item on air at the rebuild instant.</param>
+    /// <param name="upcoming">Lazily yields the item ids the previous loop had scheduled after the airing item.</param>
+    /// <returns>The index the rebuilt loop should be rotated to start at.</returns>
+    internal static int FindSpliceIndex(IReadOnlyList<ProgramEntry> built, Guid airingItemId, Func<IReadOnlyList<Guid>> upcoming)
+    {
+        ArgumentNullException.ThrowIfNull(built);
+        ArgumentNullException.ThrowIfNull(upcoming);
+        var candidates = new List<int>();
         for (var i = 0; i < built.Count; i++)
         {
-            if (built[i].ItemId == airing.Program.ItemId)
+            if (built[i].ItemId == airingItemId)
             {
-                index = i;
+                candidates.Add(i);
+            }
+        }
+
+        if (candidates.Count == 0)
+        {
+            return 0;
+        }
+
+        if (candidates.Count == 1)
+        {
+            return candidates[0];
+        }
+
+        var next = upcoming();
+        var best = candidates[0];
+        var bestScore = -1;
+        foreach (var candidate in candidates)
+        {
+            var score = 0;
+            for (var k = 0; k < next.Count && k + 1 < built.Count; k++)
+            {
+                if (built[(candidate + 1 + k) % built.Count].ItemId != next[k])
+                {
+                    break;
+                }
+
+                score++;
+            }
+
+            if (score > bestScore)
+            {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+
+        return best;
+    }
+
+    // The item ids the previous loop had scheduled right after the airing slot (up to SpliceContext of them), used
+    // to tell apart repeated occurrences of the airing item in the rebuilt loop.
+    private List<Guid> UpcomingItemIds(Channel channel, IReadOnlyList<ProgramEntry> previous, ScheduledProgram airing, DateTime nowUtc)
+    {
+        var ids = new List<Guid>(SpliceContext);
+        foreach (var slot in BuildTimeline(channel, previous, nowUtc, nowUtc.AddDays(2)))
+        {
+            if (slot.Start < airing.Stop)
+            {
+                continue;
+            }
+
+            ids.Add(slot.Program.ItemId);
+            if (ids.Count >= SpliceContext)
+            {
                 break;
             }
         }
 
-        var rotated = index == 0 ? built : built.Skip(index).Concat(built.Take(index)).ToList();
-        return new ProgramLoop(rotated, airing.Start);
+        return ids;
     }
 
     /// <summary>

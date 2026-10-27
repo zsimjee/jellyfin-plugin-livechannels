@@ -279,6 +279,13 @@
                                     <div class="fieldDescription">How the channel arranges its content. Chronological plays oldest to newest by release date.</div>
                                 </div>
                                 <div id="favorGroup" class="hidden">
+                                    <div class="checkboxContainer checkboxContainer-withDescription">
+                                        <label class="emby-checkbox-label">
+                                            <input type="checkbox" is="emby-checkbox" id="advanceEveryLoop" />
+                                            <span class="checkboxLabel">Advance shows every loop</span>
+                                        </label>
+                                        <div class="fieldDescription">Each time the loop comes around, every show moves on to its next block instead of replaying the same block until the next daily refresh.</div>
+                                    </div>
                                     <div class="selectContainer">
                                         <label class="selectLabel" for="favorKind">Favor content type</label>
                                         <select id="favorKind" class="jpk-selector-dropdown">

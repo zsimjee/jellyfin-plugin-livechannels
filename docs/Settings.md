@@ -100,6 +100,7 @@ The Channel Settings section covers playback, guide tags, episode grouping, cont
 | **Keep multipart episodes together** | Holds every part of a multipart story ("The Trap (1)", "(2)", "(3)", and so on) in the same block so it never splits, even when that runs past the episodes per block. | on |
 | **Loop order** | **Shuffle** is deterministic and repeatable, so the guide and the stream always agree, and each series contributes one block per loop pass so nothing dominates. **Alphabetical** plays by name. **Chronological** plays oldest to newest by release date. | Shuffle |
 | **Episode order** | Within a series, **Air order** or **Random**. | Air order |
+| **Advance shows every loop** | Shuffle only. Each time the loop comes around, every show moves on to its next block, so a channel works through each series pass by pass instead of airing the same block on every pass until the next daily refresh. The loop grows to as many passes as the longest series needs (capped at 5,000 entries). Below the cap the loop is the same every day, so a refresh never jumps the schedule; a capped loop keeps the daily rotation so the rest of its longest series still comes round. | off |
 | **Favor content type** | On a shuffled channel, weights **Movies**, **Shows**, or **Music videos** more heavily by repeating them toward a target share. | No preference |
 | **Favor strength** | How strong that weighting is: **Slight**, **Moderate**, or **Heavy**. Shown once a content type is favored. | Moderate |
 
