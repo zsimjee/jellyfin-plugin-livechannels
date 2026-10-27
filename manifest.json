@@ -9,12 +9,12 @@
     "imageUrl": "https://raw.githubusercontent.com/zsimjee/jellyfin-plugin-livechannels/advance-every-loop-10.11/Jellyfin.Plugin.LiveChannels/Assets/Logo.png",
     "versions": [
       {
-        "version": "10.11.13.1001",
-        "changelog": "Adds the Advance shows every loop option for shuffled channels.",
+        "version": "10.11.13.1002",
+        "changelog": "Adds the Round robin loop order and the Advance shows every loop option.",
         "targetAbi": "10.11.10.0",
-        "sourceUrl": "https://github.com/zsimjee/jellyfin-plugin-livechannels/releases/download/v10.11.13.1001/jellyfin-plugin-livechannels-10.11.13.1001.zip",
-        "checksum": "9c05da21430efa2cff3f7b7358632407",
-        "timestamp": "2026-10-27T05:26:02Z"
+        "sourceUrl": "https://github.com/zsimjee/jellyfin-plugin-livechannels/releases/download/v10.11.13.1002/jellyfin-plugin-livechannels-10.11.13.1002.zip",
+        "checksum": "a72ef3a36e5d3bb0c51fda9a4b072073",
+        "timestamp": "2026-10-27T05:40:24Z"
       }
     ]
   }
