@@ -139,6 +139,11 @@ public static class ProgramLoopBuilder
             }
         }
 
+        if (options.Mode == LoopMode.RoundRobin)
+        {
+            return BuildRoundRobin(blocks);
+        }
+
         if (options.Mode != LoopMode.Shuffle)
         {
             // Chronological orders blocks by their earliest release/air date; alphabetical (the default non-shuffle
@@ -342,6 +347,47 @@ public static class ProgramLoopBuilder
     // How many times to inflate the favoured type's slots so it reaches its target share of the loop. Returns 1
     // (no change) when nothing is favoured, the type is absent, the type is already the whole channel, or it is
     // already above its target. Capped so a tiny favoured library does not repeat absurdly often.
+    // Round robin: series in alphabetical order, each starting at its first block and moving on one block per pass
+    // (A 1-2, B 1-2, C 1-2, A 3-4, ...). Standalone items (movies, videos) act as one extra "series" dealt last in
+    // each pass, one item per pass in alphabetical order. The loop holds enough passes for the longest series to play
+    // through once (shorter ones wrap round and start again), capped at MaxAdvancingLoopEntries. It does not depend
+    // on the daily rotation, so it is the same loop every day.
+    private static List<ProgramEntry> BuildRoundRobin(List<Block> blocks)
+    {
+        var groups = blocks
+            .Where(b => b.GroupKey.StartsWith("series:", StringComparison.Ordinal))
+            .GroupBy(b => b.GroupKey, StringComparer.Ordinal)
+            .Select(g => g.OrderBy(b => b.Seq).ToList())
+            .OrderBy(g => g[0].SortName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(g => g[0].GroupKey, StringComparer.Ordinal)
+            .ToList();
+
+        var standalone = blocks
+            .Where(b => !b.GroupKey.StartsWith("series:", StringComparison.Ordinal))
+            .OrderBy(b => b.SortName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(b => b.GroupKey, StringComparer.Ordinal)
+            .ToList();
+        if (standalone.Count > 0)
+        {
+            groups.Add(standalone);
+        }
+
+        var wanted = groups.Max(g => g.Count);
+        var entriesPerPass = groups.Sum(g => Math.Max(1, (int)Math.Ceiling(g.Average(b => b.Items.Count))));
+        var passes = Math.Clamp(wanted, 1, Math.Max(1, MaxAdvancingLoopEntries / Math.Max(1, entriesPerPass)));
+
+        var loop = new List<ProgramEntry>();
+        for (var pass = 0; pass < passes; pass++)
+        {
+            foreach (var group in groups)
+            {
+                loop.AddRange(group[pass % group.Count].Items);
+            }
+        }
+
+        return loop;
+    }
+
     // How many passes a shuffled loop holds. A classic loop is a single pass. An advancing loop holds enough passes
     // for its longest series to play every block once (a short series simply wraps round and starts again), but
     // never more entries than MaxAdvancingLoopEntries; past that cap the daily rotation carries the series on.
